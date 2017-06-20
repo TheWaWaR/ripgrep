@@ -19,6 +19,9 @@ build = "build.rs"
 [[bin]]
 name = "rg"
 
+[[bin]]
+name = "use_lib"
+
 [[test]]
 name = "integration"
 path = "tests/tests.rs"

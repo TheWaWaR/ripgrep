@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
+use regex::bytes::Regex;
+
 pub use args::Args;
 pub use search_stream::LineMatch;
 use worker::Work;
@@ -65,12 +67,14 @@ pub fn get_files(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     run_files_one_thread(args)
 }
 
-pub fn get_matches(args: Arc<Args>) -> Result<Vec<FileMatch>> {
-    if args.threads() == 1 || args.is_one_path() {
+pub fn get_matches(args: Arc<Args>) -> Result<(Regex, Vec<FileMatch>)> {
+    let regex = args.grep().regex().clone();
+    let matches = if args.threads() == 1 || args.is_one_path() {
         run_one_thread(args)
     } else {
         run_parallel(args)
-    }
+    };
+    matches.map(|matches|(regex, matches))
 }
 
 
@@ -196,23 +200,6 @@ pub fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
                 worker.run(printer.as_mut(), Work::DirEntry(dent))
             };
         match_count += line_matches.len() as u64;
-        /*
-        if !line_matches.is_empty() {
-            println!(">>[Path]: {:?}", path);
-            for LineMatch{ line_number, buf } in line_matches {
-                let current_line = String::from_utf8(buf.clone()).unwrap();
-                println!("   [{}]: {:?}",
-                         line_number.unwrap_or(0), current_line);
-                for m in args.grep().regex().find_iter(&buf) {
-                    println!(
-                        "     [Match]: start={:?}, end={}, content={:?}",
-                        m.start(), m.end(),
-                        String::from_utf8(buf[m.start()..m.end()].to_vec().clone()).unwrap()
-                    );
-                }
-            }
-        }
-         */
         file_matches.push(FileMatch {
             path,
             lines: line_matches,
