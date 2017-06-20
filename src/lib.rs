@@ -26,7 +26,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-use args::Args;
+pub use args::Args;
+pub use search_stream::LineMatch;
 use worker::Work;
 
 macro_rules! errored {
@@ -42,8 +43,8 @@ macro_rules! eprintln {
     }}
 }
 
-mod app;
-mod args;
+pub mod app;
+pub mod args;
 mod decoder;
 mod pathutil;
 mod printer;
@@ -54,6 +55,25 @@ mod worker;
 
 pub type Result<T> = result::Result<T, Box<Error + Send + Sync>>;
 
+use std::path::PathBuf;
+pub struct FileMatch {
+    pub path: PathBuf,
+    pub lines: Vec<LineMatch>,
+}
+
+pub fn get_files(args: Arc<Args>) -> Result<Vec<PathBuf>> {
+    run_files_one_thread(args)
+}
+
+pub fn get_matches(args: Arc<Args>) -> Result<Vec<FileMatch>> {
+    if args.threads() == 1 || args.is_one_path() {
+        run_one_thread(args)
+    } else {
+        run_parallel(args)
+    }
+}
+
+#[allow(dead_code)]
 fn main() {
     match Args::parse().map(Arc::new).and_then(run) {
         Ok(0) => process::exit(1),
@@ -65,6 +85,7 @@ fn main() {
     }
 }
 
+#[allow(dead_code)]
 fn run(args: Arc<Args>) -> Result<u64> {
     if args.never_match() {
         return Ok(0);
@@ -73,6 +94,7 @@ fn run(args: Arc<Args>) -> Result<u64> {
     if args.files() {
         if threads == 1 || args.is_one_path() {
             run_files_one_thread(args)
+                .map(|files| files.len() as u64)
         } else {
             run_files_parallel(args)
         }
@@ -80,18 +102,38 @@ fn run(args: Arc<Args>) -> Result<u64> {
         run_types(args)
     } else if threads == 1 || args.is_one_path() {
         run_one_thread(args)
+            .map(|matches| matches.len() as u64)
     } else {
         run_parallel(args)
+            .map(|matches| matches.len() as u64)
     }
 }
 
-fn run_parallel(args: Arc<Args>) -> Result<u64> {
+fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     let bufwtr = Arc::new(args.buffer_writer());
     let quiet_matched = args.quiet_matched();
     let paths_searched = Arc::new(AtomicUsize::new(0));
     let match_count = Arc::new(AtomicUsize::new(0));
 
+    let (matches_tx, matches_rx) = std::sync::mpsc::channel::<Option<FileMatch>>();
+    let matches_handler = std::thread::spawn(move || {
+        let mut matches = Vec::<FileMatch>::new();
+        loop {
+            if let Ok(current_match) = matches_rx.recv() {
+                if let Some(file_match) = current_match {
+                    matches.push(file_match);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        matches
+    });
+
     args.walker_parallel().run(|| {
+        let matches_tx = matches_tx.clone();
         let args = args.clone();
         let quiet_matched = quiet_matched.clone();
         let paths_searched = paths_searched.clone();
@@ -113,20 +155,26 @@ fn run_parallel(args: Arc<Args>) -> Result<u64> {
                 None => return Continue,
                 Some(dent) => dent,
             };
+            let path = dent.path().to_owned();
             paths_searched.fetch_add(1, Ordering::SeqCst);
             buf.clear();
             {
                 // This block actually executes the search and prints the
                 // results into outbuf.
                 let mut printer = args.printer(&mut buf);
-                let count =
+                let line_matches =
                     if dent.is_stdin() {
-                        worker.run(&mut printer, Work::Stdin)
+                        worker.run(printer.as_mut(), Work::Stdin)
                     } else {
-                        worker.run(&mut printer, Work::DirEntry(dent))
+                        worker.run(printer.as_mut(), Work::DirEntry(dent))
                     };
-                match_count.fetch_add(count as usize, Ordering::SeqCst);
-                if quiet_matched.set_match(count > 0) {
+                let line_match_count = line_matches.len();
+                match_count.fetch_add(line_match_count, Ordering::SeqCst);
+                let _ = matches_tx.send(Some(FileMatch {
+                    path,
+                    lines: line_matches
+                }));
+                if quiet_matched.set_match(line_match_count > 0) {
                     return Quit;
                 }
             }
@@ -136,20 +184,24 @@ fn run_parallel(args: Arc<Args>) -> Result<u64> {
             Continue
         })
     });
+
     if !args.paths().is_empty() && paths_searched.load(Ordering::SeqCst) == 0 {
         if !args.no_messages() {
             eprint_nothing_searched();
         }
     }
-    Ok(match_count.load(Ordering::SeqCst) as u64)
+    // Ok(match_count.load(Ordering::SeqCst) as u64)
+    let _ = matches_tx.send(None);
+    Ok(matches_handler.join().unwrap())
 }
 
-fn run_one_thread(args: Arc<Args>) -> Result<u64> {
+fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     let stdout = args.stdout();
     let mut stdout = stdout.lock();
     let mut worker = args.worker();
     let mut paths_searched: u64 = 0;
     let mut match_count = 0;
+    let mut file_matches = Vec::new();
     for result in args.walker() {
         let dent = match get_or_log_dir_entry(
             result,
@@ -165,23 +217,48 @@ fn run_one_thread(args: Arc<Args>) -> Result<u64> {
                 break;
             }
             if let Some(sep) = args.file_separator() {
-                printer = printer.file_separator(sep);
+                if let Some(p) = printer {
+                    printer = Some(p.file_separator(sep));
+                }
             }
         }
         paths_searched += 1;
-        match_count +=
+        let path = dent.path().to_owned();
+        let line_matches =
             if dent.is_stdin() {
-                worker.run(&mut printer, Work::Stdin)
+                worker.run(printer.as_mut(), Work::Stdin)
             } else {
-                worker.run(&mut printer, Work::DirEntry(dent))
+                worker.run(printer.as_mut(), Work::DirEntry(dent))
             };
+        match_count += line_matches.len() as u64;
+        /*
+        if !line_matches.is_empty() {
+            println!(">>[Path]: {:?}", path);
+            for LineMatch{ line_number, buf } in line_matches {
+                let current_line = String::from_utf8(buf.clone()).unwrap();
+                println!("   [{}]: {:?}",
+                         line_number.unwrap_or(0), current_line);
+                for m in args.grep().regex().find_iter(&buf) {
+                    println!(
+                        "     [Match]: start={:?}, end={}, content={:?}",
+                        m.start(), m.end(),
+                        String::from_utf8(buf[m.start()..m.end()].to_vec().clone()).unwrap()
+                    );
+                }
+            }
+        }
+         */
+        file_matches.push(FileMatch {
+            path,
+            lines: line_matches,
+        });
     }
     if !args.paths().is_empty() && paths_searched == 0 {
         if !args.no_messages() {
             eprint_nothing_searched();
         }
     }
-    Ok(match_count)
+    Ok(file_matches)
 }
 
 fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
@@ -193,7 +270,9 @@ fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
         let mut file_count = 0;
         for dent in rx.iter() {
             if !print_args.quiet() {
-                printer.path(dent.path());
+                if let Some(ref mut p) = printer {
+                    p.path(dent.path());
+                }
             }
             file_count += 1;
         }
@@ -216,10 +295,11 @@ fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
     Ok(print_thread.join().unwrap())
 }
 
-fn run_files_one_thread(args: Arc<Args>) -> Result<u64> {
+fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
-    let mut file_count = 0;
+    let mut _file_count = 0;
+    let mut files = Vec::new();
     for result in args.walker() {
         let dent = match get_or_log_dir_entry(
             result,
@@ -229,20 +309,26 @@ fn run_files_one_thread(args: Arc<Args>) -> Result<u64> {
             None => continue,
             Some(dent) => dent,
         };
+        files.push(dent.path().to_owned());
         if !args.quiet() {
-            printer.path(dent.path());
+            if let Some(ref mut p) = printer {
+                p.path(dent.path());
+            }
         }
-        file_count += 1;
+        _file_count += 1;
     }
-    Ok(file_count)
+    Ok(files)
 }
 
+#[allow(dead_code)]
 fn run_types(args: Arc<Args>) -> Result<u64> {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
     let mut ty_count = 0;
     for def in args.type_defs() {
-        printer.type_def(def);
+        if let Some(ref mut p) = printer {
+            p.type_def(def);
+        }
         ty_count += 1;
     }
     Ok(ty_count)

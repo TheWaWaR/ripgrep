@@ -16,11 +16,6 @@ license = "Unlicense/MIT"
 exclude = ["HomebrewFormula"]
 build = "build.rs"
 
-[[bin]]
-bench = false
-path = "src/main.rs"
-name = "rg"
-
 [[test]]
 name = "integration"
 path = "tests/tests.rs"

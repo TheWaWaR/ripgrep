@@ -60,10 +60,15 @@ impl fmt::Display for Error {
     }
 }
 
+pub struct LineMatch {
+    pub line_number: Option<u64>,
+    pub buf: Vec<u8>,
+}
+
 pub struct Searcher<'a, R, W: 'a> {
     opts: Options,
     inp: &'a mut InputBuffer,
-    printer: &'a mut Printer<W>,
+    printer: Option<&'a mut Printer<W>>,
     grep: &'a Grep,
     path: &'a Path,
     haystack: R,
@@ -151,7 +156,7 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
     /// `haystack` is a reader of text to search.
     pub fn new(
         inp: &'a mut InputBuffer,
-        printer: &'a mut Printer<W>,
+        printer: Option<&'a mut Printer<W>>,
         grep: &'a Grep,
         path: &'a Path,
         haystack: R,
@@ -255,7 +260,8 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
     /// Execute the search. Results are written to the printer and the total
     /// number of matches is returned.
     #[inline(never)]
-    pub fn run(mut self) -> Result<u64, Error> {
+    pub fn run(mut self) -> Result<Vec<LineMatch>, Error> {
+        let mut matches = Vec::new();
         self.inp.reset();
         self.match_count = 0;
         self.line_count = if self.opts.line_number { Some(0) } else { None };
@@ -283,14 +289,18 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
                         let upto_context = self.inp.pos;
                         self.print_after_context(upto_context);
                         self.print_before_context(upto_context);
-                        self.print_inverted_matches(upto);
+                        for entry in self.print_inverted_matches(upto) {
+                            matches.push(entry);
+                        }
                     }
                 } else if matched {
                     let start = self.last_match.start();
                     let end = self.last_match.end();
                     self.print_after_context(start);
                     self.print_before_context(start);
-                    self.print_match(start, end);
+                    if let Some(entry) = self.print_match(start, end) {
+                        matches.push(entry);
+                    }
                 }
                 if matched {
                     self.inp.pos = self.last_match.end();
@@ -299,16 +309,18 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
                 }
             }
         }
-        if self.match_count > 0 {
-            if self.opts.count {
-                self.printer.path_count(self.path, self.match_count);
-            } else if self.opts.files_with_matches {
-                self.printer.path(self.path);
+        if let Some(printer) = self.printer {
+            if self.match_count > 0 {
+                if self.opts.count {
+                    printer.path_count(self.path, self.match_count);
+                } else if self.opts.files_with_matches {
+                    printer.path(self.path);
+                }
+            } else if self.opts.files_without_matches {
+                printer.path(self.path);
             }
-        } else if self.opts.files_without_matches {
-            self.printer.path(self.path);
         }
-        Ok(self.match_count)
+        Ok(matches)
     }
 
     #[inline(always)]
@@ -346,16 +358,20 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
     }
 
     #[inline(always)]
-    fn print_inverted_matches(&mut self, upto: usize) {
+    fn print_inverted_matches(&mut self, upto: usize) -> Vec<LineMatch> {
+        let mut matches = Vec::new();
         debug_assert!(self.opts.invert_match);
         let mut it = IterLines::new(self.opts.eol, self.inp.pos);
         while let Some((start, end)) = it.next(&self.inp.buf[..upto]) {
             if self.terminate() {
-                return;
+                return matches;
             }
-            self.print_match(start, end);
+            if let Some(entry) = self.print_match(start, end) {
+                matches.push(entry);
+            }
             self.inp.pos = end;
         }
+        matches
     }
 
     #[inline(always)]
@@ -399,27 +415,44 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
     }
 
     #[inline(always)]
-    fn print_match(&mut self, start: usize, end: usize) {
+    fn print_match(&mut self, start: usize, end: usize) -> Option<LineMatch> {
         self.match_count += 1;
         if self.opts.skip_matches() {
-            return;
+            return None;
         }
         self.print_separator(start);
         self.count_lines(start);
         self.add_line(end);
-        self.printer.matched(
-            self.grep.regex(), self.path,
-            &self.inp.buf, start, end, self.line_count);
+
+        // let mut matches = Vec::new();
+        // let current_line = String::from_utf8(self.inp.buf[start..end].to_vec().clone()).unwrap();
+        // for m in self.grep.regex().find_iter(&self.inp.buf[start..end]) {
+        //     matches.push((m.start(), m.end()));
+        // }
+        // println!("> [Last match ({:?})]: {:?} ~~ LINE: <{:?}>, MATCHES: {:?}",
+        //          self.line_count, self.path, current_line, matches);
+
+        if let Some(ref mut printer) = self.printer {
+            printer.matched(
+                self.grep.regex(), self.path,
+                &self.inp.buf, start, end, self.line_count);
+        }
         self.last_printed = end;
         self.after_context_remaining = self.opts.after_context;
+        Some(LineMatch {
+            line_number: self.line_count,
+            buf: self.inp.buf[start..end].to_vec().clone()
+        })
     }
 
     #[inline(always)]
     fn print_context(&mut self, start: usize, end: usize) {
         self.count_lines(start);
         self.add_line(end);
-        self.printer.context(
-            &self.path, &self.inp.buf, start, end, self.line_count);
+        if let Some(ref mut printer) = self.printer {
+            printer.context(
+                &self.path, &self.inp.buf, start, end, self.line_count);
+        }
         self.last_printed = end;
     }
 
@@ -428,12 +461,14 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
         if self.opts.before_context == 0 && self.opts.after_context == 0 {
             return;
         }
-        if !self.printer.has_printed() {
-            return;
-        }
-        if (self.last_printed == 0 && before > 0)
-            || self.last_printed < before {
-            self.printer.context_separate();
+        if let Some(ref mut printer) = self.printer {
+            if !printer.has_printed() {
+                return;
+            }
+            if (self.last_printed == 0 && before > 0)
+                || self.last_printed < before {
+                    printer.context_separate();
+                }
         }
     }
 
@@ -773,7 +808,7 @@ mod tests {
     use printer::Printer;
     use termcolor;
 
-    use super::{InputBuffer, Searcher, start_of_previous_lines};
+    use super::{InputBuffer, LineMatch, Searcher, start_of_previous_lines};
 
     const SHERLOCK: &'static str = "\
 For the Doctor Watsons of this world, as opposed to the Sherlock
@@ -818,14 +853,14 @@ fn main() {
         pat: &str,
         haystack: &str,
         mut map: F,
-    ) -> (u64, String) {
+    ) -> (Vec<LineMatch>, String) {
         let mut inp = InputBuffer::with_capacity(1);
         let outbuf = termcolor::NoColor::new(vec![]);
         let mut pp = Printer::new(outbuf).with_filename(true);
         let grep = GrepBuilder::new(pat).build().unwrap();
         let count = {
             let searcher = Searcher::new(
-                &mut inp, &mut pp, &grep, test_path(), hay(haystack));
+                &mut inp, Some(&mut pp), &grep, test_path(), hay(haystack));
             map(searcher).run().unwrap()
         };
         (count, String::from_utf8(pp.into_inner().into_inner()).unwrap())
@@ -835,17 +870,17 @@ fn main() {
         pat: &str,
         haystack: &str,
         mut map: F,
-    ) -> (u64, String) {
+    ) -> (Vec<LineMatch>, String) {
         let mut inp = InputBuffer::with_capacity(4096);
         let outbuf = termcolor::NoColor::new(vec![]);
         let mut pp = Printer::new(outbuf).with_filename(true);
         let grep = GrepBuilder::new(pat).build().unwrap();
-        let count = {
+        let matches = {
             let searcher = Searcher::new(
-                &mut inp, &mut pp, &grep, test_path(), hay(haystack));
+                &mut inp, Some(&mut pp), &grep, test_path(), hay(haystack));
             map(searcher).run().unwrap()
         };
-        (count, String::from_utf8(pp.into_inner().into_inner()).unwrap())
+        (matches, String::from_utf8(pp.into_inner().into_inner()).unwrap())
     }
 
     #[test]

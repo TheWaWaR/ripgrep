@@ -63,6 +63,7 @@ pub struct Args {
     no_ignore_parent: bool,
     no_ignore_vcs: bool,
     no_messages: bool,
+    no_printer: bool,
     null: bool,
     only_matching: bool,
     path_separator: Option<u8>,
@@ -132,23 +133,25 @@ impl Args {
 
     /// Create a new printer of individual search results that writes to the
     /// writer given.
-    pub fn printer<W: termcolor::WriteColor>(&self, wtr: W) -> Printer<W> {
-        let mut p = Printer::new(wtr)
-            .colors(self.colors.clone())
-            .column(self.column)
-            .context_separator(self.context_separator.clone())
-            .eol(self.eol)
-            .heading(self.heading)
-            .line_per_match(self.line_per_match)
-            .null(self.null)
-            .only_matching(self.only_matching)
-            .path_separator(self.path_separator)
-            .with_filename(self.with_filename)
-            .max_columns(self.max_columns);
-        if let Some(ref rep) = self.replace {
-            p = p.replace(rep.clone());
-        }
-        p
+    pub fn printer<W: termcolor::WriteColor>(&self, wtr: W) -> Option<Printer<W>> {
+        if !self.no_printer {
+            let mut p = Printer::new(wtr)
+                .colors(self.colors.clone())
+                .column(self.column)
+                .context_separator(self.context_separator.clone())
+                .eol(self.eol)
+                .heading(self.heading)
+                .line_per_match(self.line_per_match)
+                .null(self.null)
+                .only_matching(self.only_matching)
+                .path_separator(self.path_separator)
+                .with_filename(self.with_filename)
+                .max_columns(self.max_columns);
+            if let Some(ref rep) = self.replace {
+                p = p.replace(rep.clone());
+            }
+            Some(p)
+        } else { None }
     }
 
     /// Retrieve the configured file separator.
@@ -344,6 +347,7 @@ impl<'a> ArgMatches<'a> {
             no_ignore_parent: self.no_ignore_parent(),
             no_ignore_vcs: self.no_ignore_vcs(),
             no_messages: self.is_present("no-messages"),
+            no_printer: self.is_present("no-printer"),
             null: self.is_present("null"),
             only_matching: self.is_present("only-matching"),
             path_separator: try!(self.path_separator()),

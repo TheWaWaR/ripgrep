@@ -12,7 +12,7 @@ use decoder::DecodeReader;
 use pathutil::strip_prefix;
 use printer::Printer;
 use search_buffer::BufferSearcher;
-use search_stream::{InputBuffer, Searcher};
+use search_stream::{InputBuffer, Searcher, LineMatch};
 
 use Result;
 
@@ -207,9 +207,9 @@ impl Worker {
     /// A work item can either be stdin or a file path.
     pub fn run<W: WriteColor>(
         &mut self,
-        printer: &mut Printer<W>,
+        printer: Option<&mut Printer<W>>,
         work: Work,
-    ) -> u64 {
+    ) -> Vec<LineMatch> {
         let result = match work {
             Work::Stdin => {
                 let stdin = io::stdin();
@@ -224,7 +224,7 @@ impl Worker {
                         if !self.opts.no_messages {
                             eprintln!("{}: {}", path.display(), err);
                         }
-                        return 0;
+                        return vec![];
                     }
                 };
                 if let Some(p) = strip_prefix("./", path) {
@@ -238,24 +238,24 @@ impl Worker {
             }
         };
         match result {
-            Ok(count) => {
-                count
+            Ok(matches) => {
+                matches
             }
             Err(err) => {
                 if !self.opts.no_messages {
                     eprintln!("{}", err);
                 }
-                0
+                vec![]
             }
         }
     }
 
     fn search<R: io::Read, W: WriteColor>(
         &mut self,
-        printer: &mut Printer<W>,
+        printer: Option<&mut Printer<W>>,
         path: &Path,
         rdr: R,
-    ) -> Result<u64> {
+    ) -> Result<Vec<LineMatch>> {
         let rdr = DecodeReader::new(
             rdr, &mut self.decodebuf, self.opts.encoding);
         let searcher = Searcher::new(
@@ -278,10 +278,10 @@ impl Worker {
 
     fn search_mmap<W: WriteColor>(
         &mut self,
-        printer: &mut Printer<W>,
+        printer: Option<&mut Printer<W>>,
         path: &Path,
         file: &File,
-    ) -> Result<u64> {
+    ) -> Result<Vec<LineMatch>> {
         if try!(file.metadata()).len() == 0 {
             // Opening a memory map with an empty file results in an error.
             // However, this may not actually be an empty file! For example,

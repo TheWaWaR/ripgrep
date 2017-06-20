@@ -144,6 +144,7 @@ pub fn app() -> App<'static, 'static> {
              .validator(validate_number))
         .arg(flag("mmap"))
         .arg(flag("no-messages"))
+        .arg(flag("no-printer"))
         .arg(flag("no-mmap"))
         .arg(flag("no-ignore"))
         .arg(flag("no-ignore-parent"))
@@ -414,6 +415,9 @@ lazy_static! {
              "Suppress all error messages.",
              "Suppress all error messages. This is equivalent to redirecting \
               stderr to /dev/null.");
+        doc!(h, "no-printer",
+             "Do not print anything.",
+             "Just do not print anything.");
         doc!(h, "no-mmap",
              "Never use memory maps.",
              "Never use memory maps, even when they might be faster.");
