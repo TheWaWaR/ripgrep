@@ -88,8 +88,10 @@ impl Args {
     ///
     /// Also, initialize a global logger.
     pub fn parse() -> Result<Args> {
-        let matches = app::app().get_matches();
+        Args::from(app::app().get_matches())
+    }
 
+    pub fn from(matches: clap::ArgMatches) -> Result<Args> {
         let mut logb = env_logger::LogBuilder::new();
         if matches.is_present("debug") {
             logb.filter(None, log::LogLevelFilter::Debug);

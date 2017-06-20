@@ -1,3 +1,4 @@
+extern crate clap;
 #[macro_use]
 extern crate ripgrep;
 
@@ -6,11 +7,14 @@ use std::sync::Arc;
 
 use ripgrep::{
     Args, FileMatch, LineMatch,
-    get_matches
+    app, get_matches
 };
 
 fn main() {
-    match Args::parse().map(Arc::new).and_then(get_matches) {
+    let arg_vec = vec!["xxx", "home", "-i", "-j", "1", "--no-printer"];
+    let args = Args::from(app::app().get_matches_from(arg_vec));
+    println!("Args: {:?}", args);
+    match args.map(Arc::new).and_then(get_matches) {
         Ok((grep, file_matchs)) => {
             if file_matchs.is_empty() {
                 process::exit(1);
