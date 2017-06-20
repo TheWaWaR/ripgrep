@@ -19,7 +19,6 @@ extern crate same_file;
 extern crate termcolor;
 
 use std::error::Error;
-use std::process;
 use std::result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,6 +35,7 @@ macro_rules! errored {
     }
 }
 
+#[macro_export]
 macro_rules! eprintln {
     ($($tt:tt)*) => {{
         use std::io::Write;
@@ -73,43 +73,8 @@ pub fn get_matches(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     }
 }
 
-#[allow(dead_code)]
-fn main() {
-    match Args::parse().map(Arc::new).and_then(run) {
-        Ok(0) => process::exit(1),
-        Ok(_) => process::exit(0),
-        Err(err) => {
-            eprintln!("{}", err);
-            process::exit(1);
-        }
-    }
-}
 
-#[allow(dead_code)]
-fn run(args: Arc<Args>) -> Result<u64> {
-    if args.never_match() {
-        return Ok(0);
-    }
-    let threads = args.threads();
-    if args.files() {
-        if threads == 1 || args.is_one_path() {
-            run_files_one_thread(args)
-                .map(|files| files.len() as u64)
-        } else {
-            run_files_parallel(args)
-        }
-    } else if args.type_list() {
-        run_types(args)
-    } else if threads == 1 || args.is_one_path() {
-        run_one_thread(args)
-            .map(|matches| matches.len() as u64)
-    } else {
-        run_parallel(args)
-            .map(|matches| matches.len() as u64)
-    }
-}
-
-fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
+pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     let bufwtr = Arc::new(args.buffer_writer());
     let quiet_matched = args.quiet_matched();
     let paths_searched = Arc::new(AtomicUsize::new(0));
@@ -195,7 +160,7 @@ fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     Ok(matches_handler.join().unwrap())
 }
 
-fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
+pub fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     let stdout = args.stdout();
     let mut stdout = stdout.lock();
     let mut worker = args.worker();
@@ -261,7 +226,7 @@ fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     Ok(file_matches)
 }
 
-fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
+pub fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
     let print_args = args.clone();
     let (tx, rx) = mpsc::channel::<ignore::DirEntry>();
     let print_thread = thread::spawn(move || {
@@ -295,7 +260,7 @@ fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
     Ok(print_thread.join().unwrap())
 }
 
-fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
+pub fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
     let mut _file_count = 0;
@@ -320,8 +285,7 @@ fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-#[allow(dead_code)]
-fn run_types(args: Arc<Args>) -> Result<u64> {
+pub fn run_types(args: Arc<Args>) -> Result<u64> {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
     let mut ty_count = 0;
