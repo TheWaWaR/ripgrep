@@ -11,10 +11,11 @@ use ripgrep::{
 
 fn main() {
     match Args::parse().map(Arc::new).and_then(get_matches) {
-        Ok((regex, file_matchs)) => {
+        Ok((grep, file_matchs)) => {
             if file_matchs.is_empty() {
                 process::exit(1);
             }
+            println!("====================");
             for FileMatch{ path, lines } in file_matchs {
                 if !lines.is_empty() {
                     println!(">[Path]: {:?}", path);
@@ -22,7 +23,7 @@ fn main() {
                         let current_line = String::from_utf8(buf.clone()).unwrap();
                         println!("   [{}]: {:?}",
                                  line_number.unwrap_or(0), current_line);
-                        for m in regex.find_iter(&buf) {
+                        for m in grep.regex().find_iter(&buf) {
                             println!(
                                 "     [Match]: start={:?}, end={}, content={:?}",
                                 m.start(), m.end(),

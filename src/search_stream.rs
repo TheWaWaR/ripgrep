@@ -424,14 +424,6 @@ impl<'a, R: io::Read, W: WriteColor> Searcher<'a, R, W> {
         self.count_lines(start);
         self.add_line(end);
 
-        // let mut matches = Vec::new();
-        // let current_line = String::from_utf8(self.inp.buf[start..end].to_vec().clone()).unwrap();
-        // for m in self.grep.regex().find_iter(&self.inp.buf[start..end]) {
-        //     matches.push((m.start(), m.end()));
-        // }
-        // println!("> [Last match ({:?})]: {:?} ~~ LINE: <{:?}>, MATCHES: {:?}",
-        //          self.line_count, self.path, current_line, matches);
-
         if let Some(ref mut printer) = self.printer {
             printer.matched(
                 self.grep.regex(), self.path,

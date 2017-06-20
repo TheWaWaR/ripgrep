@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-use regex::bytes::Regex;
+use grep::Grep;
 
 pub use args::Args;
 pub use search_stream::LineMatch;
@@ -67,14 +67,14 @@ pub fn get_files(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     run_files_one_thread(args)
 }
 
-pub fn get_matches(args: Arc<Args>) -> Result<(Regex, Vec<FileMatch>)> {
-    let regex = args.grep().regex().clone();
+pub fn get_matches(args: Arc<Args>) -> Result<(Grep, Vec<FileMatch>)> {
+    let args_grep = args.grep();
     let matches = if args.threads() == 1 || args.is_one_path() {
         run_one_thread(args)
     } else {
         run_parallel(args)
     };
-    matches.map(|matches|(regex, matches))
+    matches.map(|matches|(args_grep, matches))
 }
 
 
