@@ -15,12 +15,12 @@ fn main() {
     let args = Args::from(app::app().get_matches_from(arg_vec));
     println!("Args: {:?}", args);
     match args.map(Arc::new).and_then(get_matches) {
-        Ok((grep, file_matchs)) => {
-            if file_matchs.is_empty() {
+        Ok((grep, file_matches)) => {
+            if file_matches.is_empty() {
                 process::exit(1);
             }
             println!("====================");
-            for FileMatch{ path, lines } in file_matchs {
+            for FileMatch{ path, lines } in file_matches {
                 if !lines.is_empty() {
                     println!(">[Path]: {:?}", path);
                     for LineMatch{ line_number, buf } in lines {
