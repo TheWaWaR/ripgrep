@@ -127,6 +127,12 @@ pub fn run_parallel(
         Box::new(move |result| {
             use ignore::WalkState::*;
 
+            if let Some(length) = limit {
+                if file_count.load(Ordering::SeqCst) >= length {
+                    return Quit;
+                }
+            }
+
             if quiet_matched.has_match() {
                 return Quit;
             }
