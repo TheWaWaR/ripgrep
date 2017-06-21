@@ -255,6 +255,10 @@ impl Args {
         self.no_messages
     }
 
+    pub fn no_printer(&self) -> bool {
+        self.no_printer
+    }
+
     /// Create a new recursive directory iterator over the paths in argv.
     pub fn walker(&self) -> ignore::Walk {
         self.walker_builder().build()

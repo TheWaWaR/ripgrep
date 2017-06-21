@@ -190,7 +190,9 @@ pub fn run_parallel(
 
     if !args.paths().is_empty() && paths_searched.load(Ordering::SeqCst) == 0 {
         if !args.no_messages() {
-            eprint_nothing_searched();
+            if !args.no_printer() {
+                eprint_nothing_searched();
+            }
         }
     }
     // Ok(match_count.load(Ordering::SeqCst) as u64)
@@ -261,7 +263,9 @@ pub fn run_one_thread(
     }
     if !args.paths().is_empty() && paths_searched == 0 {
         if !args.no_messages() {
-            eprint_nothing_searched();
+            if !args.no_printer() {
+                eprint_nothing_searched();
+            }
         }
     }
     Ok(file_matches)
