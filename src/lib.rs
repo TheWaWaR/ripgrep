@@ -18,6 +18,7 @@ extern crate regex;
 extern crate same_file;
 extern crate termcolor;
 
+use std::path::{Path, PathBuf};
 use std::error::Error;
 use std::result;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ pub use grep::{Grep, GrepBuilder};
 
 pub use args::Args;
 pub use search_stream::LineMatch;
+pub use ignore::WalkState;
 use worker::Work;
 
 macro_rules! errored {
@@ -57,39 +59,48 @@ mod worker;
 
 pub type Result<T> = result::Result<T, Box<Error + Send + Sync>>;
 
-use std::path::PathBuf;
+
+#[derive(Eq, PartialEq)]
+pub enum PredicateState {
+    Nothing,
+    Continue,
+    Quit
+}
 pub struct FileMatch {
     pub path: PathBuf,
     pub lines: Vec<LineMatch>,
 }
 
-pub fn get_files(
+pub fn get_files<P>(
     args: Arc<Args>,
-    find: Option<Grep>,
-    limit: Option<usize>,
-) -> Result<Vec<PathBuf>> {
-    run_files_one_thread(args, find, limit)
+    predicate: Arc<P>,
+) -> Result<Vec<PathBuf>>
+    where P: Fn(usize, Option<PathBuf>) -> PredicateState + 'static
+{
+    run_files_one_thread(args, predicate)
 }
 
-pub fn get_matches(
+pub fn get_matches<P>(
     args: Arc<Args>,
-    find: Option<Grep>,
-    limit: Option<usize>,
-) -> Result<(Grep, Vec<FileMatch>)> {
+    predicate: Arc<P>,
+) -> Result<(Grep, Vec<FileMatch>)>
+    where P: Fn(usize, Option<PathBuf>) -> PredicateState + Send + Sync + 'static
+{
     let args_grep = args.grep();
     let matches = if args.threads() == 1 || args.is_one_path() {
-        run_one_thread(args, find, limit)
+        run_one_thread(args, predicate)
     } else {
-        run_parallel(args, find, limit)
+        run_parallel(args, predicate)
     };
     matches.map(|matches|(args_grep, matches))
 }
 
-pub fn run_parallel(
+pub fn run_parallel<P>(
     args: Arc<Args>,
-    find: Option<Grep>,
-    limit: Option<usize>,
-) -> Result<Vec<FileMatch>> {
+    predicate: Arc<P>,
+) -> Result<Vec<FileMatch>>
+    where P: Fn(usize, Option<PathBuf>) -> PredicateState + Send + Sync + 'static
+{
     let bufwtr = Arc::new(args.buffer_writer());
     let quiet_matched = args.quiet_matched();
     let paths_searched = Arc::new(AtomicUsize::new(0));
@@ -120,18 +131,12 @@ pub fn run_parallel(
         let paths_searched = paths_searched.clone();
         let line_count = line_count.clone();
         let file_count = file_count.clone();
-        let find = find.clone();
+        let predicate = predicate.clone();
         let bufwtr = bufwtr.clone();
         let mut buf = bufwtr.buffer();
         let mut worker = args.worker();
         Box::new(move |result| {
             use ignore::WalkState::*;
-
-            if let Some(length) = limit {
-                if file_count.load(Ordering::SeqCst) >= length {
-                    return Quit;
-                }
-            }
 
             if quiet_matched.has_match() {
                 return Quit;
@@ -144,12 +149,14 @@ pub fn run_parallel(
                 None => return Continue,
                 Some(dent) => dent,
             };
-            let path = dent.path().to_owned();
-            if let Some(ref grep) = find {
-                if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
-                    return Continue;
-                }
+            let state = predicate(
+                file_count.load(Ordering::SeqCst)+1,
+                Some(dent.path().to_owned())
+            );
+            if state == PredicateState::Continue {
+                return Continue;
             }
+            let path = dent.path().to_owned();
 
             paths_searched.fetch_add(1, Ordering::SeqCst);
             buf.clear();
@@ -171,10 +178,8 @@ pub fn run_parallel(
                         path,
                         lines: line_matches
                     }));
-                    if let Some(length) = limit {
-                        if file_count.load(Ordering::SeqCst) >= length {
-                            return Quit;
-                        }
+                    if state == PredicateState::Quit {
+                        return Quit;
                     }
                 }
                 if quiet_matched.set_match(line_match_count > 0) {
@@ -200,11 +205,12 @@ pub fn run_parallel(
     Ok(matches_handler.join().unwrap())
 }
 
-pub fn run_one_thread(
+pub fn run_one_thread<P>(
     args: Arc<Args>,
-    find: Option<Grep>,
-    limit: Option<usize>,
-) -> Result<Vec<FileMatch>> {
+    predicate: Arc<P>,
+) -> Result<Vec<FileMatch>>
+    where P: Fn(usize, Option<PathBuf>) -> PredicateState
+{
     let stdout = args.stdout();
     let mut stdout = stdout.lock();
     let mut worker = args.worker();
@@ -221,12 +227,12 @@ pub fn run_one_thread(
             None => continue,
             Some(dent) => dent,
         };
-        let path = dent.path().to_owned();
-        if let Some(ref grep) = find {
-            if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
-                continue;
-            }
+
+        let state = predicate(file_count+1, Some(dent.path().to_owned()));
+        if state == PredicateState::Continue {
+            continue;
         }
+        let path = dent.path().to_owned();
 
         let mut printer = args.printer(&mut stdout);
         if line_count > 0 {
@@ -254,10 +260,8 @@ pub fn run_one_thread(
                 path,
                 lines: line_matches,
             });
-            if let Some(length) = limit {
-                if file_count >= length {
-                    break;
-                }
+            if state == PredicateState::Quit {
+                break;
             }
         }
     }
@@ -309,11 +313,12 @@ pub fn run_files_parallel(
     Ok(print_thread.join().unwrap())
 }
 
-pub fn run_files_one_thread(
+pub fn run_files_one_thread<P>(
     args: Arc<Args>,
-    find: Option<Grep>,
-    limit: Option<usize>,
-) -> Result<Vec<PathBuf>> {
+    predicate: Arc<P>,
+) -> Result<Vec<PathBuf>>
+    where P: Fn(usize, Option<PathBuf>) -> PredicateState + 'static
+{
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
     let mut file_count = 0;
@@ -327,12 +332,11 @@ pub fn run_files_one_thread(
             None => continue,
             Some(dent) => dent,
         };
-        let path = dent.path().to_owned();
-        if let Some(ref grep) = find {
-            if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
-                continue;
-            }
+        let state = predicate(file_count+1, Some(dent.path().to_owned()));
+        if state == PredicateState::Continue {
+            continue;
         }
+        let path = dent.path().to_owned();
 
         files.push(path);
         if !args.quiet() {
@@ -341,10 +345,8 @@ pub fn run_files_one_thread(
             }
         }
         file_count += 1;
-        if let Some(length) = limit {
-            if file_count >= length {
-                break;
-            }
+        if state == PredicateState::Quit {
+            break;
         }
     }
     Ok(files)

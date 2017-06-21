@@ -5,7 +5,7 @@ use std::process;
 use std::sync::Arc;
 
 use ripgrep::{
-    Args, Result,
+    Args, Result, PredicateState,
     run_files_one_thread,
     run_files_parallel,
     run_types,
@@ -29,9 +29,10 @@ fn run(args: Arc<Args>) -> Result<u64> {
         return Ok(0);
     }
     let threads = args.threads();
+    let predicate = Arc::new(|_, _| PredicateState::Nothing);
     if args.files() {
         if threads == 1 || args.is_one_path() {
-            run_files_one_thread(args, None, None)
+            run_files_one_thread(args, predicate)
                 .map(|files| files.len() as u64)
         } else {
             run_files_parallel(args, None, None)
@@ -39,10 +40,10 @@ fn run(args: Arc<Args>) -> Result<u64> {
     } else if args.type_list() {
         run_types(args)
     } else if threads == 1 || args.is_one_path() {
-        run_one_thread(args, None, None)
+        run_one_thread(args, predicate)
             .map(|matches| matches.len() as u64)
     } else {
-        run_parallel(args, None, None)
+        run_parallel(args, predicate)
             .map(|matches| matches.len() as u64)
     }
 }

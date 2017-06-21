@@ -6,7 +6,7 @@ use std::process;
 use std::sync::Arc;
 
 use ripgrep::{
-    Args, FileMatch, LineMatch,
+    Args, FileMatch, LineMatch, PredicateState,
     app, get_matches
 };
 
@@ -21,7 +21,14 @@ fn main() {
     let args = Args::from(app::app().get_matches_from(arg_vec));
     println!("Args: {:?}", args);
     let args = Arc::new(args.unwrap());
-    match get_matches(args, None, None) {
+    let predicate = Arc::new(|count, _| {
+        if count >= 5 {
+            PredicateState::Quit
+        } else {
+            PredicateState::Nothing
+        }
+    });
+    match get_matches(args, predicate) {
         Ok((grep, file_matches)) => {
             if file_matches.is_empty() {
                 process::exit(1);
