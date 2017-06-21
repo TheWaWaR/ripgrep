@@ -11,10 +11,17 @@ use ripgrep::{
 };
 
 fn main() {
-    let arg_vec = vec!["xxx", "home", "-i", "-j", "1", "--no-printer"];
+    let arg_vec = vec![
+        "xxx", "home",
+        "-i",
+        "-j", "1",
+        "--no-printer",
+        "--max-count", "3",
+    ];
     let args = Args::from(app::app().get_matches_from(arg_vec));
     println!("Args: {:?}", args);
-    match args.map(Arc::new).and_then(get_matches) {
+    let args = Arc::new(args.unwrap());
+    match get_matches(args, None, None) {
         Ok((grep, file_matches)) => {
             if file_matches.is_empty() {
                 process::exit(1);

@@ -39,10 +39,10 @@ fn run(args: Arc<Args>) -> Result<u64> {
     } else if args.type_list() {
         run_types(args)
     } else if threads == 1 || args.is_one_path() {
-        run_one_thread(args)
+        run_one_thread(args, None, None)
             .map(|matches| matches.len() as u64)
     } else {
-        run_parallel(args)
+        run_parallel(args, None, None)
             .map(|matches| matches.len() as u64)
     }
 }

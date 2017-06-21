@@ -67,22 +67,30 @@ pub fn get_files(args: Arc<Args>) -> Result<Vec<PathBuf>> {
     run_files_one_thread(args)
 }
 
-pub fn get_matches(args: Arc<Args>) -> Result<(Grep, Vec<FileMatch>)> {
+pub fn get_matches(
+    args: Arc<Args>,
+    find: Option<Grep>,
+    limit: Option<usize>,
+) -> Result<(Grep, Vec<FileMatch>)> {
     let args_grep = args.grep();
     let matches = if args.threads() == 1 || args.is_one_path() {
-        run_one_thread(args)
+        run_one_thread(args, find, limit)
     } else {
-        run_parallel(args)
+        run_parallel(args, find, limit)
     };
     matches.map(|matches|(args_grep, matches))
 }
 
-
-pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
+pub fn run_parallel(
+    args: Arc<Args>,
+    find: Option<Grep>,
+    limit: Option<usize>,
+) -> Result<Vec<FileMatch>> {
     let bufwtr = Arc::new(args.buffer_writer());
     let quiet_matched = args.quiet_matched();
     let paths_searched = Arc::new(AtomicUsize::new(0));
-    let match_count = Arc::new(AtomicUsize::new(0));
+    let line_count = Arc::new(AtomicUsize::new(0));
+    let file_count = Arc::new(AtomicUsize::new(0));
 
     let (matches_tx, matches_rx) = std::sync::mpsc::channel::<Option<FileMatch>>();
     let matches_handler = std::thread::spawn(move || {
@@ -106,7 +114,9 @@ pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
         let args = args.clone();
         let quiet_matched = quiet_matched.clone();
         let paths_searched = paths_searched.clone();
-        let match_count = match_count.clone();
+        let line_count = line_count.clone();
+        let file_count = file_count.clone();
+        let find = find.clone();
         let bufwtr = bufwtr.clone();
         let mut buf = bufwtr.buffer();
         let mut worker = args.worker();
@@ -125,6 +135,12 @@ pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
                 Some(dent) => dent,
             };
             let path = dent.path().to_owned();
+            if let Some(ref grep) = find {
+                if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
+                    return Continue;
+                }
+            }
+
             paths_searched.fetch_add(1, Ordering::SeqCst);
             buf.clear();
             {
@@ -138,11 +154,19 @@ pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
                         worker.run(printer.as_mut(), Work::DirEntry(dent))
                     };
                 let line_match_count = line_matches.len();
-                match_count.fetch_add(line_match_count, Ordering::SeqCst);
-                let _ = matches_tx.send(Some(FileMatch {
-                    path,
-                    lines: line_matches
-                }));
+                if line_match_count > 0 {
+                    line_count.fetch_add(1, Ordering::SeqCst);
+                    line_count.fetch_add(line_match_count, Ordering::SeqCst);
+                    let _ = matches_tx.send(Some(FileMatch {
+                        path,
+                        lines: line_matches
+                    }));
+                    if let Some(length) = limit {
+                        if file_count.load(Ordering::SeqCst) >= length {
+                            return Quit;
+                        }
+                    }
+                }
                 if quiet_matched.set_match(line_match_count > 0) {
                     return Quit;
                 }
@@ -164,13 +188,18 @@ pub fn run_parallel(args: Arc<Args>) -> Result<Vec<FileMatch>> {
     Ok(matches_handler.join().unwrap())
 }
 
-pub fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
+pub fn run_one_thread(
+    args: Arc<Args>,
+    find: Option<Grep>,
+    limit: Option<usize>,
+) -> Result<Vec<FileMatch>> {
     let stdout = args.stdout();
     let mut stdout = stdout.lock();
     let mut worker = args.worker();
     let mut paths_searched: u64 = 0;
-    let mut match_count = 0;
     let mut file_matches = Vec::new();
+    let mut line_count = 0;
+    let mut file_count = 0;
     for result in args.walker() {
         let dent = match get_or_log_dir_entry(
             result,
@@ -180,8 +209,15 @@ pub fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
             None => continue,
             Some(dent) => dent,
         };
+        let path = dent.path().to_owned();
+        if let Some(ref grep) = find {
+            if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
+                continue;
+            }
+        }
+
         let mut printer = args.printer(&mut stdout);
-        if match_count > 0 {
+        if line_count > 0 {
             if args.quiet() {
                 break;
             }
@@ -192,18 +228,26 @@ pub fn run_one_thread(args: Arc<Args>) -> Result<Vec<FileMatch>> {
             }
         }
         paths_searched += 1;
-        let path = dent.path().to_owned();
         let line_matches =
             if dent.is_stdin() {
                 worker.run(printer.as_mut(), Work::Stdin)
             } else {
                 worker.run(printer.as_mut(), Work::DirEntry(dent))
             };
-        match_count += line_matches.len() as u64;
-        file_matches.push(FileMatch {
-            path,
-            lines: line_matches,
-        });
+
+        if !line_matches.is_empty() {
+            file_count += 1;
+            line_count += line_matches.len() as u64;
+            file_matches.push(FileMatch {
+                path,
+                lines: line_matches,
+            });
+            if let Some(length) = limit {
+                if file_count >= length {
+                    break;
+                }
+            }
+        }
     }
     if !args.paths().is_empty() && paths_searched == 0 {
         if !args.no_messages() {
