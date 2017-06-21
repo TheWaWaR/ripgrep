@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-pub use grep::Grep;
+pub use grep::{Grep, GrepBuilder};
 
 pub use args::Args;
 pub use search_stream::LineMatch;
