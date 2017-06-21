@@ -31,10 +31,10 @@ fn run(args: Arc<Args>) -> Result<u64> {
     let threads = args.threads();
     if args.files() {
         if threads == 1 || args.is_one_path() {
-            run_files_one_thread(args)
+            run_files_one_thread(args, None, None)
                 .map(|files| files.len() as u64)
         } else {
-            run_files_parallel(args)
+            run_files_parallel(args, None, None)
         }
     } else if args.type_list() {
         run_types(args)

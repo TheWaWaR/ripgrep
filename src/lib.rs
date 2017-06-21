@@ -63,8 +63,12 @@ pub struct FileMatch {
     pub lines: Vec<LineMatch>,
 }
 
-pub fn get_files(args: Arc<Args>) -> Result<Vec<PathBuf>> {
-    run_files_one_thread(args)
+pub fn get_files(
+    args: Arc<Args>,
+    find: Option<Grep>,
+    limit: Option<usize>,
+) -> Result<Vec<PathBuf>> {
+    run_files_one_thread(args, find, limit)
 }
 
 pub fn get_matches(
@@ -257,7 +261,11 @@ pub fn run_one_thread(
     Ok(file_matches)
 }
 
-pub fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
+pub fn run_files_parallel(
+    args: Arc<Args>,
+    _find: Option<Grep>,
+    _limit: Option<usize>,
+) -> Result<u64> {
     let print_args = args.clone();
     let (tx, rx) = mpsc::channel::<ignore::DirEntry>();
     let print_thread = thread::spawn(move || {
@@ -291,10 +299,14 @@ pub fn run_files_parallel(args: Arc<Args>) -> Result<u64> {
     Ok(print_thread.join().unwrap())
 }
 
-pub fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
+pub fn run_files_one_thread(
+    args: Arc<Args>,
+    find: Option<Grep>,
+    limit: Option<usize>,
+) -> Result<Vec<PathBuf>> {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
-    let mut _file_count = 0;
+    let mut file_count = 0;
     let mut files = Vec::new();
     for result in args.walker() {
         let dent = match get_or_log_dir_entry(
@@ -305,13 +317,25 @@ pub fn run_files_one_thread(args: Arc<Args>) -> Result<Vec<PathBuf>> {
             None => continue,
             Some(dent) => dent,
         };
-        files.push(dent.path().to_owned());
+        let path = dent.path().to_owned();
+        if let Some(ref grep) = find {
+            if !grep.regex().is_match(path.to_string_lossy().as_bytes()) {
+                continue;
+            }
+        }
+
+        files.push(path);
         if !args.quiet() {
             if let Some(ref mut p) = printer {
                 p.path(dent.path());
             }
         }
-        _file_count += 1;
+        file_count += 1;
+        if let Some(length) = limit {
+            if file_count >= length {
+                break;
+            }
+        }
     }
     Ok(files)
 }
