@@ -18,7 +18,7 @@ extern crate regex;
 extern crate same_file;
 extern crate termcolor;
 
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::error::Error;
 use std::result;
 use std::sync::Arc;
@@ -72,20 +72,24 @@ pub struct FileMatch {
 }
 
 pub fn get_files<P>(
-    args: Arc<Args>,
-    predicate: Arc<P>,
+    args: Args,
+    predicate: P,
 ) -> Result<Vec<PathBuf>>
-    where P: Fn(usize, Option<PathBuf>) -> PredicateState + 'static
+    where P: Fn(usize, PathBuf) -> PredicateState + 'static
 {
+    let args = Arc::new(args);
+    let predicate = Arc::new(predicate);
     run_files_one_thread(args, predicate)
 }
 
 pub fn get_matches<P>(
-    args: Arc<Args>,
-    predicate: Arc<P>,
+    args: Args,
+    predicate: P,
 ) -> Result<(Grep, Vec<FileMatch>)>
-    where P: Fn(usize, Option<PathBuf>) -> PredicateState + Send + Sync + 'static
+    where P: Fn(usize, PathBuf) -> PredicateState + Send + Sync + 'static
 {
+    let args = Arc::new(args);
+    let predicate = Arc::new(predicate);
     let args_grep = args.grep();
     let matches = if args.threads() == 1 || args.is_one_path() {
         run_one_thread(args, predicate)
@@ -99,7 +103,7 @@ pub fn run_parallel<P>(
     args: Arc<Args>,
     predicate: Arc<P>,
 ) -> Result<Vec<FileMatch>>
-    where P: Fn(usize, Option<PathBuf>) -> PredicateState + Send + Sync + 'static
+    where P: Fn(usize, PathBuf) -> PredicateState + Send + Sync + 'static
 {
     let bufwtr = Arc::new(args.buffer_writer());
     let quiet_matched = args.quiet_matched();
@@ -149,10 +153,7 @@ pub fn run_parallel<P>(
                 None => return Continue,
                 Some(dent) => dent,
             };
-            let state = predicate(
-                file_count.load(Ordering::SeqCst)+1,
-                Some(dent.path().to_owned())
-            );
+            let state = predicate(file_count.load(Ordering::SeqCst)+1, dent.path().to_owned());
             if state == PredicateState::Continue {
                 return Continue;
             }
@@ -209,7 +210,7 @@ pub fn run_one_thread<P>(
     args: Arc<Args>,
     predicate: Arc<P>,
 ) -> Result<Vec<FileMatch>>
-    where P: Fn(usize, Option<PathBuf>) -> PredicateState
+    where P: Fn(usize, PathBuf) -> PredicateState
 {
     let stdout = args.stdout();
     let mut stdout = stdout.lock();
@@ -228,7 +229,7 @@ pub fn run_one_thread<P>(
             Some(dent) => dent,
         };
 
-        let state = predicate(file_count+1, Some(dent.path().to_owned()));
+        let state = predicate(file_count+1, dent.path().to_owned());
         if state == PredicateState::Continue {
             continue;
         }
@@ -317,7 +318,7 @@ pub fn run_files_one_thread<P>(
     args: Arc<Args>,
     predicate: Arc<P>,
 ) -> Result<Vec<PathBuf>>
-    where P: Fn(usize, Option<PathBuf>) -> PredicateState + 'static
+    where P: Fn(usize, PathBuf) -> PredicateState + 'static
 {
     let stdout = args.stdout();
     let mut printer = args.printer(stdout.lock());
@@ -332,7 +333,7 @@ pub fn run_files_one_thread<P>(
             None => continue,
             Some(dent) => dent,
         };
-        let state = predicate(file_count+1, Some(dent.path().to_owned()));
+        let state = predicate(file_count+1, dent.path().to_owned());
         if state == PredicateState::Continue {
             continue;
         }

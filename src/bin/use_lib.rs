@@ -3,12 +3,12 @@ extern crate clap;
 extern crate ripgrep;
 
 use std::process;
-use std::sync::Arc;
 
 use ripgrep::{
-    Args, FileMatch, LineMatch, PredicateState,
+    Args, FileMatch, LineMatch,
     app, get_matches
 };
+use ripgrep::PredicateState::*;
 
 fn main() {
     let arg_vec = vec![
@@ -18,16 +18,11 @@ fn main() {
         "--no-printer",
         "--max-count", "3",
     ];
-    let args = Args::from(app::app().get_matches_from(arg_vec));
+    let args = Args::from(app::app().get_matches_from(arg_vec)).unwrap();
     println!("Args: {:?}", args);
-    let args = Arc::new(args.unwrap());
-    let predicate = Arc::new(|count, _| {
-        if count >= 5 {
-            PredicateState::Quit
-        } else {
-            PredicateState::Nothing
-        }
-    });
+    let predicate = |count, _| {
+        if count >= 5 { Quit } else { Nothing }
+    };
     match get_matches(args, predicate) {
         Ok((grep, file_matches)) => {
             if file_matches.is_empty() {
